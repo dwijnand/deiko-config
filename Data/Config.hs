@@ -109,10 +109,12 @@ import Data.Typeable
 
 --------------------------------------------------------------------------------
 import           Control.Monad.Catch
+import qualified Data.Aeson       as Aeson
 import qualified Data.Map         as M
 import           Data.Text (Text, unpack)
 import qualified Data.Text as T
 import qualified Data.Text.IO     as T
+import qualified Data.Vector      as V
 import           Text.Parsec (Parsec)
 import qualified Text.Parsec.Char as Char
 import           Text.Parsec.Combinator
@@ -334,3 +336,18 @@ wrongType key pos tye tyf = ConfigError msg where
 --------------------------------------------------------------------------------
 ctxStr :: Text -> Pos -> String
 ctxStr e pos = unpack e ++ show pos ++ " "
+
+--------------------------------------------------------------------------------
+instance Aeson.ToJSON Config where
+  toJSON (Config reg) = toJsonReg $ removeInlining $ simplifyReg reg where
+    toJsonReg = Aeson.object . M.toList . fmap ast2json . regAST
+
+    ast2json :: AST Typed -> Aeson.Value
+    ast2json ast = case astExpr ast of
+        STRING s  -> either str id $ Prim.parse (number <|> bool) "" s where
+            number = Aeson.Number . fromInteger <$> integerParsec
+            bool   = Aeson.Bool <$> boolParsec
+            str _  = Aeson.String s
+        LIST asts -> Aeson.Array $ V.fromList $ map ast2json asts
+        OBJECT ps -> Aeson.object $ map (\(Prop k child) -> (k, ast2json child)) ps
+        expr      -> error $ "Unexpected unsimplified expression" ++ show expr

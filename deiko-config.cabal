@@ -38,11 +38,28 @@ library
                    Data.Config.Internal.Typecheck
     build-depends:
         base         >= 4.7      && < 5,
+        aeson,
         array        >= 0.5      && < 0.6,
         mtl          >= 2.0      && < 3.0,
         parsec       >= 3.1.2,
         text         >= 1.0      && < 1.3,
         transformers >= 0.3      && < 0.6,
         containers,
-        exceptions
+        exceptions,
+        vector
    ghc-options: -Wall
+
+test-suite deiko-config-test
+    default-language:    Haskell2010
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is: Main.hs
+    other-modules:
+        Spec
+        AesonSpec
+    build-depends:
+        base,
+        deiko-config,
+        aeson,
+        HUnit,
+        vector
