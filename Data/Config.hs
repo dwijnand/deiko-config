@@ -108,9 +108,13 @@ import Data.Typeable
 
 --------------------------------------------------------------------------------
 import           Control.Monad.Catch
+import qualified Data.Aeson       as Aeson
 import qualified Data.Map         as M
+import           Data.Maybe (fromMaybe)
 import           Data.Text (Text, unpack)
+import qualified Data.Text        as T
 import qualified Data.Text.IO     as T
+import qualified Data.Vector      as V
 import           Text.Parsec (Parsec)
 import qualified Text.Parsec.Char as Char
 import           Text.Parsec.Combinator
@@ -289,3 +293,45 @@ wrongType key pos tye tyf = ConfigError msg where
 --------------------------------------------------------------------------------
 ctxStr :: Text -> Pos -> String
 ctxStr e pos = unpack e ++ show pos ++ " "
+
+--------------------------------------------------------------------------------
+simplifyReg :: Reg -> Reg
+simplifyReg reg = reg { regAST = fmap (simplify reg) (regAST reg) }
+
+--------------------------------------------------------------------------------
+-- Remove two forms of inlining: the extra top-level keys & the nested scope prefixes.
+-- e.g. from '{ foo: { foo.bar: 1 }, foo.bar: 1 }'
+-- to 'foo { bar: 1 }'
+removeInlining :: Reg -> Reg
+removeInlining reg = reg { regAST = M.mapMaybeWithKey go (regAST reg) } where
+    keep key = case T.break (== '.') key of
+        (_, "") -> True                       -- keep, as it's a top-level key
+        (l, _)  -> l `M.notMember` regAST reg -- keep if the first part isn't a top-level key
+
+    go key value
+        | keep key  = Just $ unscoped key value
+        | otherwise = Nothing
+
+    unscoped scope ast =
+        case astExpr ast of
+            LIST asts -> ast { astExpr = LIST $ map (unscoped scope) asts }
+            OBJECT ps -> ast { astExpr = OBJECT $ map (unscopedProp scope) ps }
+            _         -> ast
+
+    unscopedProp scope (Prop name child) = Prop stripped (unscoped name child) where
+        stripped = fromMaybe name $ T.stripPrefix (scope <> ".") name
+
+--------------------------------------------------------------------------------
+instance Aeson.ToJSON Config where
+  toJSON (Config reg) = toJsonReg $ removeInlining $ simplifyReg reg where
+    toJsonReg = Aeson.object . M.toList . fmap ast2json . regAST
+
+    ast2json :: AST Typed -> Aeson.Value
+    ast2json ast = case astExpr ast of
+        STRING s  -> either str id $ Prim.parse (number <|> bool) "" s where
+            number = Aeson.Number . fromInteger <$> integerParsec
+            bool   = Aeson.Bool <$> boolParsec
+            str _  = Aeson.String s
+        LIST asts -> Aeson.Array $ V.fromList $ map ast2json asts
+        OBJECT ps -> Aeson.object $ map (\(Prop k child) -> (k, ast2json child)) ps
+        expr      -> error $ "Unexpected unsimplified expression" ++ show expr
